@@ -1,0 +1,197 @@
+project
+
+** parametry soucastek
+.param Rx=10k
+.param Cx=1n
+.param Ec=100m
+.param freq = 100 ; pro TRAN analýzu
+
+*** NETLIST *** 
+** napajeni
+Vnap+ Vs+ 0 15V
+Vnap- 0 Vs- 15V
+Cnap1 Vs+ 0 0.1u
+Cnap2 Vs- 0 0.1u
+** zbytek zapojeni
+* Z připojeno na Y2, viz schéma
+XAD633 X1 0 Y1 Z Vs- Z W Vs+ AD633 ; pinout modelu je: X1 X2 Y1 Y2 -Vs Z W +Vs
+Rx W Z {Rx}
+Cx Z 0 {Cx} 
+** vstupy a vystupy
+Vcotrol X1 0 {Ec}
+Vsignal Y1 0 DC=0 AC=1 SIN(0 1V {freq})
+
+.inc ad633.lib
+
+*.AC OCT 10 10 1meg
+
+
+.control
+*** Bod d) ***
+echo
+echo "Variace Ec:"
+echo
+foreach val 0 10m 100m 1 10 15
+    alterparam Ec = $val
+    reset 
+
+    AC OCT 10 1 1meg
+
+    * nastaveni vypisu do souboru
+    set filetype=ascii
+    set wr_singlescale
+    set wr_vecnames
+    set filename = "tex/data/d/outputEc-$val+.csv"
+    * vypis do souboru
+    wrdata $filename db(V(Z)) ph(V(Z)) ; fáze se ukládá pro zobrazení v bodě f)
+end
+
+* vykresleni grafu z teto sekce
+plot db(ac1.v(Z)) db(ac2.v(Z)) db(ac3.v(Z)) db(ac4.v(Z)) db(ac5.v(Z)) db(ac6.v(Z))
+
+
+
+echo
+echo "Variace temp:"
+echo
+alterparam Ec = 100m
+reset 
+
+* AC analýza se provede pro každou z teplot v seznamu
+foreach val -100 0 20 40 60 80 100
+    options temp = $val ; funguje stejně jako .TEMP, ale lze použít v sekci .control a společně s proměnnou
+    AC OCT 10 1 1meg
+
+    * nastavení výpisu do souboru
+    set filetype=ascii
+    set wr_singlescale
+    set wr_vecnames
+    set filename = "tex/data/d-teplota1/outputTemp-$val+.csv"
+    * výpis do souboru
+    wrdata $filename db(V(Z))
+end
+* vykresleni grafu z teto sekce
+plot db(ac7.v(Z)) db(ac8.v(Z)) db(ac9.v(Z)) db(ac10.v(Z)) db(ac11.v(Z)) db(ac12.v(Z))
+
+
+echo
+echo "Variace temp podruhé:"
+echo
+alterparam Ec = 100m
+reset 
+* přidání teplotního koeficientu součástkám (TC1 - lineární závislost, TC2 - kvadratická)
+alter Rx TC1=0.003
+alter Cx TC1=0.003
+
+* AC analýza se provede pro každou z teplot v seznamu
+foreach val -100 0 20 27 40 60 80 100
+    options temp = $val
+    AC OCT 10 1 1meg
+
+    * nastavení výpisu do souboru
+    set filetype=ascii
+    set wr_singlescale
+    set wr_vecnames
+    set filename = "tex/data/d-teplota2/outputTemp-$val+.csv"
+    * výpis do souboru
+    wrdata $filename db(V(Z))
+end
+* vykresleni grafu z teto sekce (ac3 - 27deg nezávislé, ac16 - 27deg závislé, ac19 - 80deg závislé)
+plot db(ac3.v(Z)) db(ac16.v(Z)) db(ac19.v(Z))
+
+
+*** Bod e) ***
+echo
+echo "Výpočet f_mez:"
+echo
+reset
+setplot const ; pro nastavení globálních proměnných
+
+* nastaveni bodu, pro ktere budeme pocitat
+let Ec_actual = 0 ; počáteční hodnota
+let Ec_step = 400m ; krok
+let Ec_end = 15.2 ; maximální hodnota
+
+* hodnoty pro výpočet -- neumím načíst z netlistu, proto natvrdo zde
+let Rx = 10k
+let Cx = 1n  ; <<< Hardcoded !!
+
+* nastaveni vypisu do souboru
+set filetype=ascii
+set wr_vecnames
+set filename = "tex/data/e/output.csv"
+
+* samotny cyklus
+while Ec_actual < Ec_end
+    setplot const
+    * teoreticky vypocet
+    let f_mez = Ec_actual/(20*3.141592*Rx*Cx)
+
+    *** DETEKCE ZE SIMULOVANYCH DAT ***
+    let lastDiff = 1000
+    let actualDiff = 100
+    let lastFreq = 100
+    let actualFreq = 100
+
+    let num_points = 100 ; lze zvýšit pro lepší přesnost, výrazně ovlivňuje čas simulace
+    let ac_start_f = max(0.7*f_mez,1)
+    let ac_stop_f = 1.1*f_mez
+    echo $&num_points
+    echo $&ac_start_f
+    echo $&ac_stop_f
+
+    alterparam Ec = $&const.Ec_actual
+    reset 
+    * AC analýza vždy mezi 0.7 a 1.1 násobkem teoretické hodnoty
+    AC LIN $&num_points $&ac_start_f $&ac_stop_f
+    let f_vector = frequency
+    let K_vector = db(v(Z))
+    let index = 0
+
+    **temp section for debug
+    * let tempNum = $&const.Ec_actual
+    * set tempName = $&tempNum
+    * set filena = "tex/data/temp/outputEc-$tempName+.csv"
+    * wrdata $filena db(V(Z))
+    **end temp section for debug
+
+    * v cyklu v datech z AC analyzy hledame pokles o 3 dB
+    while const.actualDiff < const.lastDiff
+        let const.lastFreq = const.actualFreq
+        let const.actualFreq = abs(f_vector[index])
+
+        let const.lastDiff = const.actualDiff
+        let actualDiff = abs(-3-K_vector[index])
+
+        let index = index+1
+    end
+    *** KONEC DETEKCE ZE SIMULOVANYCH DAT *** 
+    *** hledana frekvence je v promenne lastFreq
+
+    * výpis zjištěných údajů do souboru, v první iteraci včetně hlavičky
+    wrdata $filename const.Ec_actual const.f_mez const.lastFreq
+    unset wr_vecnames ; vypnout zahlavi
+    set appendwrite
+
+    * inkrementace cyklu
+    let const.Ec_actual = const.Ec_actual + const.Ec_step
+end
+
+
+*** Bod f) ***
+*** VLASTNÍ EXPERIMENT - fourierova analýza a THD pro jednotlivé frekvence vstupního signálu ***
+foreach fval 10 100 1k 10k 100k
+    alterparam freq = $fval
+    reset
+    let timeStart = 4/$fval ; 4 periody
+    let timeEnd = 24/$fval ; 24 period
+    let step = (timeEnd-timeStart)/1000 ; 1000 vzorků
+    TRAN $&step $&timeEnd $&timeStart
+    set filename = "tex/data/f/fourier_output$fval+.txt"
+    fourier $fval V(Z) > $filename
+    plot V(Z) V(Y1) ; vykreslení výstupu z TRAN analýzy
+end
+
+
+.endc
+.end
